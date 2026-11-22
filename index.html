@@ -333,10 +333,10 @@
     // Map Setup (Dark CartoDB Matter tiles)
     const defaultCoords = [44.4949, 11.3426]; // Bologna / A14 corridor
     const map = L.map('map', { zoomControl: false, attributionControl: false }).setView(defaultCoords, 16);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      maxZoom: 19, subdomains: 'abcd'
-    }).addTo(map);
-
+    L.tileLayer('[https://tile.openstreetmap.org/](https://tile.openstreetmap.org/){z}/{x}/{y}.png', {
+        maxZoom: 19
+          }).addTo(map);
+    
     // State
     let followUser = true;
     let audioEnabled = true;
