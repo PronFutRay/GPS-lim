@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0e17" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>DriveGuard GPS • Autovelox & HUD</title>
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png" />
+  <link rel="apple-touch-icon" href="./icon-512.png" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <style>
+    :root {
+      --bg: #0a0e17;
+      --panel: rgba(16, 22, 36, 0.92);
+      --border: rgba(255, 255, 255, 0.1);
+      --cyan: #00e5ff;
+      --green: #00e676;
+      --amber: #ffab00;
+      --red: #ff1744;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      width: 100%; height: 100%; overflow: hidden;
+      background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    #map { position: absolute; inset: 0; z-index: 1; background: #0a0e17; }
+    .leaflet-control-attribution { display: none !important; }
+
+    /* Red Alert Vignette */
+    #alertGlow {
+      position: fixed; inset: 0; z-index: 5; pointer-events: none;
+      box-shadow: inset 0 0 0 0 rgba(255, 23, 68, 0);
+      transition: box-shadow 0.25s ease;
+    }
+    #alertGlow.active {
+      box-shadow: inset 0 0 45px 12px rgba(255, 23, 68, 0.65);
+    }
+
+    /* Top Bar */
+    .top-bar {
+      position: fixed; top: env(safe-area-inset-top, 12px); left: 12px; right: 12px;
+      z-index: 10; display: flex; flex-direction: column; gap: 8px;
+      padding-top: 8px;
+    }
+    .status-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    }
+    .pill {
+      background: var(--panel); backdrop-filter: blur(12px);
+      border: 1px solid var(--border); border-radius: 999px;
+      padding: 8px 14px; font-size: 12px; font-weight: 600;
+      display: flex; align-items: center; gap: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+    }
+    .dot {
+      width: 9px; height: 9px; border-radius: 50%; background: var(--amber);
+      box-shadow: 0 0 10px var(--amber);
+    }
+    .dot.live { background: var(--green); box-shadow: 0 0 10px var(--green); }
+    .dot.sim { background: var(--cyan); box-shadow: 0 0 10px var(--cyan); }
+
+    .btn-install {
+      background: linear-gradient(135deg, #00e5ff, #0091ea);
+      color: #041019; border: none; border-radius: 999px;
+      padding: 8px 14px; font-size: 12px; font-weight: 800;
+      cursor: pointer; display: flex; align-items: center; gap: 6px;
+      box-shadow: 0 4px 16px rgba(0, 229, 255, 0.35);
+    }
+    .btn-install.installed {
+      background: rgba(0, 230, 118, 0.18); color: var(--green);
+      border: 1px solid rgba(0, 230, 118, 0.4); box-shadow: none;
+    }
+
+    /* Radar Warning Banner */
+    .radar-banner {
+      background: linear-gradient(135deg, rgba(255, 23, 68, 0.95), rgba(183, 28, 28, 0.95));
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 16px; padding: 12px 16px;
+      display: none; flex-direction: column; gap: 8px;
+      box-shadow: 0 12px 32px rgba(255, 23, 68, 0.45);
+      animation: slideDown 0.25s ease;
+    }
+    .radar-banner.show { display: flex; }
+    @keyframes slideDown { from { transform: translateY(-12px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    .radar-top { display: flex; align-items: center; justify-content: space-between; }
+    .radar-title { font-size: 15px; font-weight: 800; letter-spacing: 0.3px; }
+    .radar-dist { font-size: 20px; font-weight: 900; font-variant-numeric: tabular-nums; }
+    .progress-track { width: 100%; height: 6px; background: rgba(0,0,0,0.35); border-radius: 99px; overflow: hidden; }
+    .progress-fill { height: 100%; width: 50%; background: #fff; border-radius: 99px; transition: width 0.3s linear; }
+
+    /* Floating Right Controls */
+    .side-controls {
+      position: fixed; right: 12px; top: 50%; transform: translateY(-50%);
+      z-index: 10; display: flex; flex-direction: column; gap: 10px;
+    }
+    .fab {
+      width: 46px; height: 46px; border-radius: 14px;
+      background: var(--panel); backdrop-filter: blur(12px);
+      border: 1px solid var(--border); color: var(--text);
+      font-size: 18px; display: flex; align-items: center; justify-content: center;
+      cursor: pointer; box-shadow: 0 8px 20px rgba(0,0,0,0.45);
+    }
+    .fab.active { border-color: var(--cyan); color: var(--cyan); }
+
+    /* Bottom HUD Dashboard */
+    .bottom-hud {
+      position: fixed; bottom: env(safe-area-inset-bottom, 12px); left: 12px; right: 12px;
+      z-index: 10; display: flex; flex-direction: column; gap: 10px;
+      padding-bottom: 6px;
+    }
+    .hud-card {
+      background: var(--panel); backdrop-filter: blur(16px);
+      border: 1px solid var(--border); border-radius: 22px;
+      padding: 14px 16px; box-shadow: 0 12px 36px rgba(0,0,0,0.6);
+    }
+    .speed-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    }
+    .speed-box { display: flex; align-items: baseline; gap: 6px; }
+    .speed-val {
+      font-size: 56px; font-weight: 900; line-height: 1;
+      font-variant-numeric: tabular-nums; letter-spacing: -2px;
+      color: var(--text); transition: color 0.2s;
+    }
+    .speed-val.over { color: var(--red); }
+    .speed-unit { font-size: 14px; font-weight: 700; color: var(--muted); }
+
+    /* European Speed Limit Sign */
+    .limit-sign {
+      width: 64px; height: 64px; border-radius: 50%;
+      background: #fff; border: 7px solid #e53935;
+      color: #111; font-size: 24px; font-weight: 900;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+      flex-shrink: 0;
+    }
+
+    .telemetry-grid {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+      margin-top: 12px; padding-top: 12px;
+      border-top: 1px solid var(--border);
+      text-align: center;
+    }
+    .tele-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+    .tele-val { font-size: 14px; font-weight: 800; margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+    .action-row {
+      display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 8px; margin-top: 12px;
+    }
+    .btn {
+      border: 1px solid var(--border); background: rgba(255,255,255,0.06);
+      color: var(--text); border-radius: 12px; padding: 11px 10px;
+      font-size: 12px; font-weight: 700; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    .btn-primary { background: rgba(0, 229, 255, 0.16); border-color: rgba(0, 229, 255, 0.45); color: var(--cyan); }
+    .btn-warn { background: rgba(255, 171, 0, 0.16); border-color: rgba(255, 171, 0, 0.45); color: var(--amber); }
+
+    /* Modal */
+    .modal-backdrop {
+      position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,0.75);
+      display: none; align-items: flex-end; justify-content: center; padding: 16px;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal-sheet {
+      width: 100%; max-width: 440px; background: #131b2e;
+      border: 1px solid var(--border); border-radius: 22px; padding: 20px;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    .modal-sheet h3 { font-size: 17px; font-weight: 800; }
+    .modal-sheet p, .modal-sheet li { font-size: 13px; color: #cbd5e1; line-height: 1.5; }
+    .modal-sheet ol { padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+    .report-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="alertGlow"></div>
+
+  <div class="top-bar">
+    <div class="status-row">
+      <div class="pill">
+        <span class="dot" id="gpsDot"></span>
+        <span id="gpsStatus">Buscando señal GPS...</span>
+      </div>
+      <button class="btn-install" id="installBtn" onclick="triggerInstall()">
+        📲 Instalar App
+      </button>
+    </div>
+
+    <div class="radar-banner" id="radarBanner">
+      <div class="radar-top">
+        <div>
+          <div class="radar-title" id="radarTitle">⚠️ AUTOVELOX FIJO</div>
+          <div style="font-size:12px;opacity:0.9" id="radarSub">Límite 50 km/h • Reduce velocidad</div>
+        </div>
+        <div class="radar-dist" id="radarDist">320 m</div>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill" id="radarProgress"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="side-controls">
+    <button class="fab active" id="btnFollow" onclick="toggleFollow()" title="Centrar GPS">🎯</button>
+    <button class="fab active" id="btnAudio" onclick="toggleAudio()" title="Alertas de voz">🔊</button>
+    <button class="fab" id="btnSpeedMult" onclick="cycleSimSpeed()" title="Velocidad simulación">1x</button>
+  </div>
+
+  <div class="bottom-hud">
+    <div class="hud-card">
+      <div class="speed-row">
+        <div class="speed-box">
+          <div class="speed-val" id="speedVal">0</div>
+          <div class="speed-unit">km/h</div>
+        </div>
+        <div style="text-align:right;flex:1">
+          <div style="font-size:11px;color:var(--muted)" id="streetName">GPS en tiempo real</div>
+          <div style="font-size:13px;font-weight:700;color:var(--cyan);margin-top:2px" id="nextRadarHint">Sin radares cercanos</div>
+        </div>
+        <div class="limit-sign" id="limitSign">50</div>
+      </div>
+
+      <div class="telemetry-grid">
+        <div>
+          <div class="tele-label">Rumbo</div>
+          <div class="tele-val" id="headingVal">--° N</div>
+        </div>
+        <div>
+          <div class="tele-label">Altitud</div>
+          <div class="tele-val" id="altVal">-- m</div>
+        </div>
+        <div>
+          <div class="tele-label">Precisión</div>
+          <div class="tele-val" id="accVal">-- m</div>
+        </div>
+        <div>
+          <div class="tele-label">Distancia</div>
+          <div class="tele-val" id="tripVal">0.0 km</div>
+        </div>
+      </div>
+
+      <div class="action-row">
+        <button class="btn btn-primary" id="btnSim" onclick="toggleSimulation()">▶️ Simular Ruta</button>
+        <button class="btn btn-warn" onclick="openReportModal()">🚨 Reportar</button>
+        <button class="btn" onclick="resetTrip()">🔄 Reiniciar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Report Modal -->
+  <div class="modal-backdrop" id="reportModal" onclick="if(event.target===this)closeReportModal()">
+    <div class="modal-sheet">
+      <h3>🚨 Reportar alerta en tu posición</h3>
+      <p>Añade un radar o incidencia en tiempo real sobre el mapa:</p>
+      <div class="report-grid">
+        <button class="btn btn-warn" onclick="addUserRadar('Autovelox Móvil', 50)">📸 Autovelox Móvil</button>
+        <button class="btn btn-warn" onclick="addUserRadar('Control Policial', 50)">🚓 Control Policial</button>
+        <button class="btn btn-warn" onclick="addUserRadar('Radar Semáforo', 50)">🚦 Semáforo Cámara</button>
+        <button class="btn btn-warn" onclick="addUserRadar('Peligro / Obra', 40)">⚠️ Peligro en Vía</button>
+      </div>
+      <button class="btn" onclick="closeReportModal()">Cancelar</button>
+    </div>
+  </div>
+
+  <!-- Install Guide Modal -->
+  <div class="modal-backdrop" id="installModal" onclick="if(event.target===this)closeInstallModal()">
+    <div class="modal-sheet">
+      <h3>📲 Instalar DriveGuard en Android</h3>
+      <p>Para instalarla como aplicación nativa en pantalla completa en tu Android:</p>
+      <ol>
+        <li>Abre esta página usando <strong>Google Chrome</strong> en tu teléfono Android.</li>
+        <li>Toca el menú de <strong>3 puntos (⋮)</strong> arriba a la derecha.</li>
+        <li>Selecciona <strong>"Instalar aplicación"</strong> o <strong>"Añadir a pantalla de inicio"</strong>.</li>
+        <li>Confirma tocando <strong>Instalar</strong>. Aparecerá en tu cajón de apps con su icono propio.</li>
+      </ol>
+      <button class="btn btn-primary" onclick="closeInstallModal()">Entendido</button>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script>
+    // Register Service Worker for real Android WebAPK installation
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(console.error);
+      });
+    }
+
+    let deferredPrompt = null;
+    const installBtn = document.getElementById('installBtn');
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      installBtn.textContent = '📲 Instalar en Android';
+    });
+
+    window.addEventListener('appinstalled', () => {
+      deferredPrompt = null;
+      installBtn.textContent = '✅ App Instalada';
+      installBtn.classList.add('installed');
+    });
+
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      installBtn.textContent = '✅ Modo App Activo';
+      installBtn.classList.add('installed');
+    }
+
+    async function triggerInstall() {
+      if (deferredPrompt) {
+        deferredPrompt.prompt();
+        const { outcome } = await deferredPrompt.userChoice;
+        if (outcome === 'accepted') {
+          deferredPrompt = null;
+        }
+      } else {
+        document.getElementById('installModal').classList.add('open');
+      }
+    }
+    function closeInstallModal() { document.getElementById('installModal').classList.remove('open'); }
+    function openReportModal() { document.getElementById('reportModal').classList.add('open'); }
+    function closeReportModal() { document.getElementById('reportModal').classList.remove('open'); }
+
+    // Map Setup (Dark CartoDB Matter tiles)
+    const defaultCoords = [44.4949, 11.3426]; // Bologna / A14 corridor
+    const map = L.map('map', { zoomControl: false, attributionControl: false }).setView(defaultCoords, 16);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19, subdomains: 'abcd'
+    }).addTo(map);
+
+    // State
+    let followUser = true;
+    let audioEnabled = true;
+    let isSimulating = false;
+    let simTimer = null;
+    let simSpeedMult = 1;
+    let simIndex = 0;
+    let currentPos = { lat: defaultCoords[0], lng: defaultCoords[1], speed: 0, heading: 0, alt: 54, acc: 5 };
+    let lastPos = null;
+    let tripMeters = 0;
+    let currentLimit = 50;
+    let lastSpokenRadarId = null;
+
+    // Vehicle Marker & Trail
+    const carIcon = L.divIcon({
+      className: '',
+      html: `<div id="carArrow" style="width:34px;height:34px;display:flex;align-items:center;justify-content:center;transform:rotate(0deg);transition:transform 0.2s linear;">
+        <svg width="32" height="32" viewBox="0 0 32 32">
+          <circle cx="16" cy="16" r="14" fill="rgba(0,229,255,0.22)"/>
+          <polygon points="16,4 26,26 16,21 6,26" fill="#00e5ff" stroke="#041019" stroke-width="2"/>
+        </svg>
+      </div>`,
+      iconSize: [34, 34],
+      iconAnchor: [17, 17]
+    });
+    const carMarker = L.marker(defaultCoords, { icon: carIcon, zIndexOffset: 1000 }).addTo(map);
+    const trailLine = L.polyline([], { color: '#00e5ff', weight: 4, opacity: 0.75 }).addTo(map);
+
+    // Preloaded Autovelox & Tutor Database (Italy / Bologna - A14 + dynamic around user)
+    let radars = [
+      { id: 'r1', name: 'Autovelox Viale Panzacchi', type: 'AUTOVELOX FIJO', lat: 44.4868, lng: 11.3485, limit: 50 },
+      { id: 'r2', name: 'Semáforo T-Red Porta Santo Stefano', type: 'CÁMARA SEMÁFORO', lat: 44.4842, lng: 11.3562, limit: 50 },
+      { id: 'r3', name: 'Autovelox Tangenziale / A14', type: 'TUTOR TRAMO', lat: 44.5025, lng: 11.3680, limit: 90 },
+      { id: 'r4', name: 'Autostrada A14 Km 18', type: 'AUTOVELOX FIJO', lat: 44.4960, lng: 11.3920, limit: 130 }
+    ];
+    let radarMarkers = {};
+
+    function renderRadars() {
+      Object.values(radarMarkers).forEach(m => map.removeLayer(m));
+      radarMarkers = {};
+      radars.forEach(r => {
+        const icon = L.divIcon({
+          className: '',
+          html: `<div style="background:#ff1744;color:#fff;border:2px solid #fff;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:900;box-shadow:0 0 12px rgba(255,23,68,0.8);">📷</div>`,
+          iconSize: [28, 28], iconAnchor: [14, 14]
+        });
+        radarMarkers[r.id] = L.marker([r.lat, r.lng], { icon })
+          .bindPopup(`<b>${r.type}</b><br>${r.name}<br>Límite: <b>${r.limit} km/h</b>`)
+          .addTo(map);
+      });
+    }
+    renderRadars();
+
+    // Generate local radars around real user GPS on first fix so alerts work anywhere in the world
+    let seededLocalRadars = false;
+    function seedNearbyRadars(lat, lng) {
+      if (seededLocalRadars) return;
+      seededLocalRadars = true;
+      radars.push(
+        { id: 'local1', name: 'Autovelox Zona Norte', type: 'AUTOVELOX FIJO', lat: lat + 0.0032, lng: lng + 0.0021, limit: 50 },
+        { id: 'local2', name: 'Radar Tramo Sur', type: 'TUTOR TRAMO', lat: lat - 0.0040, lng: lng - 0.0025, limit: 70 }
+      );
+      renderRadars();
+    }
+
+    // Haversine distance in meters
+    function getDistanceMeters(lat1, lon1, lat2, lon2) {
+      const R = 6371000;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    function getBearing(lat1, lon1, lat2, lon2) {
+      const y = Math.sin((lon2-lon1)*Math.PI/180) * Math.cos(lat2*Math.PI/180);
+      const x = Math.cos(lat1*Math.PI/180)*Math.sin(lat2*Math.PI/180) -
+                Math.sin(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.cos((lon2-lon1)*Math.PI/180);
+      return ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
+    }
+
+    // Audio Beep & Speech
+    function playAlertSound(text) {
+      if (!audioEnabled) return;
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        osc.frequency.setValueAtTime(1120, ctx.currentTime + 0.14);
+        gain.gain.setValueAtTime(0.18, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(); osc.stop(ctx.currentTime + 0.36);
+      } catch (e) {}
+      if ('speechSynthesis' in window && text) {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.lang = 'es-ES';
+        utter.rate = 1.05;
+        window.speechSynthesis.speak(utter);
+      }
+    }
+
+    // Update UI & Radar Proximity
+    function updateTelemetry(lat, lng, speedKmh, heading, alt, acc, label) {
+      if (lastPos) {
+        const stepDist = getDistanceMeters(lastPos.lat, lastPos.lng, lat, lng);
+        if (stepDist > 1 && stepDist < 2000) tripMeters += stepDist;
+      }
+      lastPos = { lat, lng };
+      currentPos = { lat, lng, speed: speedKmh, heading, alt, acc };
+
+      carMarker.setLatLng([lat, lng]);
+      const arrowEl = document.getElementById('carArrow');
+      if (arrowEl && !isNaN(heading)) arrowEl.style.transform = `rotate(${Math.round(heading)}deg)`;
+      trailLine.addLatLng([lat, lng]);
+      if (followUser) map.panTo([lat, lng], { animate: true, duration: 0.4 });
+
+      // Find nearest radar
+      let nearest = null;
+      let minDist = Infinity;
+      for (const r of radars) {
+        const d = getDistanceMeters(lat, lng, r.lat, r.lng);
+        if (d < minDist) { minDist = d; nearest = r; }
+      }
+
+      if (nearest && minDist < 650) {
+        currentLimit = nearest.limit;
+        document.getElementById('radarBanner').classList.add('show');
+        document.getElementById('radarTitle').textContent = `⚠️ ${nearest.type}`;
+        document.getElementById('radarSub').textContent = `${nearest.name} • Límite ${nearest.limit} km/h`;
+        document.getElementById('radarDist').textContent = `${Math.round(minDist)} m`;
+        const pct = Math.max(5, Math.min(100, 100 - (minDist / 650) * 100));
+        document.getElementById('radarProgress').style.width = pct + '%';
+        document.getElementById('nextRadarHint').textContent = `${nearest.type} a ${Math.round(minDist)} m`;
+
+        if (lastSpokenRadarId !== nearest.id && minDist < 500) {
+          lastSpokenRadarId = nearest.id;
+          playAlertSound(`Atención, ${nearest.type.toLowerCase()} a ${Math.round(minDist)} metros. Límite ${nearest.limit} kilómetros por hora.`);
+        }
+      } else {
+        document.getElementById('radarBanner').classList.remove('show');
+        if (nearest) {
+          document.getElementById('nextRadarHint').textContent = `Próximo radar: ${(minDist/1000).toFixed(1)} km`;
+        }
+        if (minDist > 800) lastSpokenRadarId = null;
+      }
+
+      // Speed & Over-limit Alert
+      const roundedSpeed = Math.round(speedKmh);
+      const speedEl = document.getElementById('speedVal');
+      speedEl.textContent = roundedSpeed;
+      document.getElementById('limitSign').textContent = currentLimit;
+      if (label) document.getElementById('streetName').textContent = label;
+
+      const isOver = roundedSpeed > currentLimit;
+      speedEl.classList.toggle('over', isOver);
+      document.getElementById('alertGlow').classList.toggle('active', isOver || (nearest && minDist < 300));
+
+      const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
+      const dirTxt = dirs[Math.round(((heading || 0) % 360) / 45) % 8];
+      document.getElementById('headingVal').textContent = `${Math.round(heading || 0)}° ${dirTxt}`;
+      document.getElementById('altVal').textContent = `${Math.round(alt || 0)} m`;
+      document.getElementById('accVal').textContent = `±${Math.round(acc || 5)} m`;
+      document.getElementById('tripVal').textContent = `${(tripMeters / 1000).toFixed(2)} km`;
+    }
+
+    // Real GPS Tracking
+    if ('geolocation' in navigator) {
+      navigator.geolocation.watchPosition(
+        (pos) => {
+          if (isSimulating) return;
+          const { latitude, longitude, speed, heading, altitude, accuracy } = pos.coords;
+          seedNearbyRadars(latitude, longitude);
+          document.getElementById('gpsDot').className = 'dot live';
+          document.getElementById('gpsStatus').textContent = `GPS Activo (±${Math.round(accuracy)}m)`;
+          const kmh = speed !== null ? speed * 3.6 : 0;
+          const brg = heading !== null ? heading : (lastPos ? getBearing(lastPos.lat, lastPos.lng, latitude, longitude) : 0);
+          updateTelemetry(latitude, longitude, kmh, brg, altitude || 0, accuracy, 'Navegación GPS en vivo');
+        },
+        (err) => {
+          if (!isSimulating) {
+            document.getElementById('gpsStatus').textContent = 'Permiso GPS pendiente • Usa Simular';
+          }
+        },
+        { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 }
+      );
+    }
+
+    // Demo Route Simulation (Bologna -> A14)
+    const simRoute = [
+      { lat: 44.4910, lng: 11.3430, speed: 46, limit: 50, road: 'Via d Azeglio • Bologna' },
+      { lat: 44.4892, lng: 11.3455, speed: 54, limit: 50, road: 'Viale Panzacchi (Aprox. Autovelox)' },
+      { lat: 44.4872, lng: 11.3480, speed: 48, limit: 50, road: 'Control Autovelox Viale Panzacchi' },
+      { lat: 44.4855, lng: 11.3520, speed: 52, limit: 50, road: 'Viale Gozzadini' },
+      { lat: 44.4844, lng: 11.3558, speed: 45, limit: 50, road: 'Porta Santo Stefano (Cámara T-Red)' },
+      { lat: 44.4885, lng: 11.3610, speed: 78, limit: 90, road: 'Enlace Tangenziale Bologna' },
+      { lat: 44.4965, lng: 11.3655, speed: 96, limit: 90, road: 'Tangenziale (Aprox. Tutor)' },
+      { lat: 44.5020, lng: 11.3678, speed: 88, limit: 90, road: 'Pórtico Tutor Tangenziale' },
+      { lat: 44.4995, lng: 11.3805, speed: 124, limit: 130, road: 'Autostrada A14 Direzione Ancona' },
+      { lat: 44.4962, lng: 11.3915, speed: 136, limit: 130, road: 'A14 Km 18 • Autovelox' },
+      { lat: 44.4935, lng: 11.4040, speed: 126, limit: 130, road: 'Autostrada A14 • Crucero' }
+    ];
+
+    function toggleSimulation() {
+      isSimulating = !isSimulating;
+      const btn = document.getElementById('btnSim');
+      if (isSimulating) {
+        btn.textContent = '⏹️ Detener Sim.';
+        document.getElementById('gpsDot').className = 'dot sim';
+        document.getElementById('gpsStatus').textContent = `Modo Simulación (${simSpeedMult}x)`;
+        simIndex = 0;
+        trailLine.setLatLngs([]);
+        runSimStep();
+      } else {
+        btn.textContent = '▶️ Simular Ruta';
+        clearTimeout(simTimer);
+        document.getElementById('gpsDot').className = 'dot';
+        document.getElementById('gpsStatus').textContent = 'Simulación detenida';
+        document.getElementById('alertGlow').classList.remove('active');
+      }
+    }
+
+    function runSimStep() {
+      if (!isSimulating) return;
+      const pt = simRoute[simIndex];
+      const nextPt = simRoute[(simIndex + 1) % simRoute.length];
+      const brg = getBearing(pt.lat, pt.lng, nextPt.lat, nextPt.lng);
+      currentLimit = pt.limit;
+      updateTelemetry(pt.lat, pt.lng, pt.speed, brg, 62, 4, pt.road);
+      simIndex = (simIndex + 1) % simRoute.length;
+      simTimer = setTimeout(runSimStep, 1800 / simSpeedMult);
+    }
+
+    function cycleSimSpeed() {
+      simSpeedMult = simSpeedMult === 1 ? 2 : simSpeedMult === 2 ? 4 : 1;
+      document.getElementById('btnSpeedMult').textContent = simSpeedMult + 'x';
+      if (isSimulating) document.getElementById('gpsStatus').textContent = `Modo Simulación (${simSpeedMult}x)`;
+    }
+
+    function toggleFollow() {
+      followUser = !followUser;
+      document.getElementById('btnFollow').classList.toggle('active', followUser);
+      if (followUser) map.panTo([currentPos.lat, currentPos.lng]);
+    }
+
+    function toggleAudio() {
+      audioEnabled = !audioEnabled;
+      const btn = document.getElementById('btnAudio');
+      btn.textContent = audioEnabled ? '🔊' : '🔇';
+      btn.classList.toggle('active', audioEnabled);
+    }
+
+    function addUserRadar(type, limit) {
+      const id = 'usr_' + Date.now();
+      radars.push({
+        id,
+        name: `${type} (Reportado)`,
+        type: type.toUpperCase(),
+        lat: currentPos.lat,
+        lng: currentPos.lng,
+        limit
+      });
+      renderRadars();
+      closeReportModal();
+      playAlertSound(`${type} reportado en tu ubicación.`);
+    }
+
+    function resetTrip() {
+      tripMeters = 0;
+      trailLine.setLatLngs([]);
+      document.getElementById('tripVal').textContent = '0.00 km';
+    }
+  </script>
+</body>
+</html>
